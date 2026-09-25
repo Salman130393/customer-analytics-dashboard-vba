@@ -1,0 +1,413 @@
+Option Explicit
+
+'====================================================================
+' CUSTOMER ANALYTICS DASHBOARD - MASTER MODULE v5 (Locked UI Version)
+' + Analyst name label + Refresh button (added on request)
+'====================================================================
+
+Public Sub BuildCustomerAnalyticsDashboard()
+
+    Dim wb As Workbook
+    Dim wsData As Worksheet, wsPivot As Worksheet, wsDash As Worksheet
+    Dim loTbl As ListObject
+    Dim pc As PivotCache
+    Dim ptTrend As PivotTable, ptAgent As PivotTable, ptRegion As PivotTable
+    Dim ptProduct As PivotTable, ptConversion As PivotTable
+    Dim ws As Worksheet
+
+    Set wb = ThisWorkbook
+
+    '----------------------------------------------------------------
+    ' 0. IDEMPOTENCY: remove existing Dashboard / Pivot sheets & caches
+    '----------------------------------------------------------------
+    Application.DisplayAlerts = False
+    For Each ws In wb.Worksheets
+        If ws.Name = "Dashboard" Or ws.Name = "Pivot" Then
+            ws.Delete
+        End If
+    Next ws
+    Application.DisplayAlerts = True
+
+    Set wsData = wb.Worksheets("Customer_Data")
+
+    '----------------------------------------------------------------
+    ' 1. DATA DICTIONARY -> Table
+    '----------------------------------------------------------------
+    On Error Resume Next
+    Set loTbl = wsData.ListObjects("tbl_CustomerData")
+    On Error GoTo 0
+
+    If loTbl Is Nothing Then
+        Dim usedRng As Range
+        Set usedRng = wsData.UsedRange
+        Set loTbl = wsData.ListObjects.Add(xlSrcRange, usedRng, , xlYes)
+        loTbl.Name = "tbl_CustomerData"
+    End If
+
+    '----------------------------------------------------------------
+    ' 2. PIVOT SHEET
+    '----------------------------------------------------------------
+    Set wsPivot = wb.Worksheets.Add
+    wsPivot.Name = "Pivot"
+
+    Set pc = wb.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=loTbl)
+
+    ' PT_Trend (Line): Row=Month, Column=Year, Values=Sum of Revenue -> F3
+    Set ptTrend = pc.CreatePivotTable(TableDestination:=wsPivot.Range("F3"), TableName:="PT_Trend")
+    With ptTrend
+        .PivotFields("Month").Orientation = xlRowField
+        .PivotFields("Year").Orientation = xlColumnField
+        With .PivotFields("Revenue Generated")
+            .Orientation = xlDataField
+            .Function = xlSum
+            .NumberFormat = "$#,##0"
+        End With
+    End With
+
+    ' PT_Agent (Column): Row=Agent Name, Values=Sum of Revenue, sort desc -> Q3
+    Set ptAgent = pc.CreatePivotTable(TableDestination:=wsPivot.Range("Q3"), TableName:="PT_Agent")
+    With ptAgent
+        .PivotFields("Agent Name").Orientation = xlRowField
+        With .PivotFields("Revenue Generated")
+            .Orientation = xlDataField
+            .Function = xlSum
+            .NumberFormat = "$#,##0"
+        End With
+        .PivotFields("Agent Name").AutoSort xlDescending, "Sum of Revenue Generated"
+    End With
+
+    ' PT_Region (Column): Row=Region, Values=Sum of Revenue, sort desc -> K3
+    Set ptRegion = pc.CreatePivotTable(TableDestination:=wsPivot.Range("K3"), TableName:="PT_Region")
+    With ptRegion
+        .PivotFields("Region").Orientation = xlRowField
+        With .PivotFields("Revenue Generated")
+            .Orientation = xlDataField
+            .Function = xlSum
+            .NumberFormat = "$#,##0"
+        End With
+        .PivotFields("Region").AutoSort xlDescending, "Sum of Revenue Generated"
+    End With
+
+    ' PT_Product (Bar): Row=Product/Service, Values=Sum of Revenue, sort desc -> N3
+    Set ptProduct = pc.CreatePivotTable(TableDestination:=wsPivot.Range("N3"), TableName:="PT_Product")
+    With ptProduct
+        .PivotFields("Product/Service").Orientation = xlRowField
+        With .PivotFields("Revenue Generated")
+            .Orientation = xlDataField
+            .Function = xlSum
+            .NumberFormat = "$#,##0"
+        End With
+        .PivotFields("Product/Service").AutoSort xlDescending, "Sum of Revenue Generated"
+    End With
+
+    ' PT_Conversion (Doughnut): Row=Conversion Status, Values=Count of Lead ID -> T3
+    Set ptConversion = pc.CreatePivotTable(TableDestination:=wsPivot.Range("T3"), TableName:="PT_Conversion")
+    With ptConversion
+        .PivotFields("Conversion Status").Orientation = xlRowField
+        With .PivotFields("Lead ID")
+            .Orientation = xlDataField
+            .Function = xlCount
+        End With
+    End With
+
+    ' PT_KPI helper range C3:D8 + named ranges
+    With wsPivot
+        .Range("C3").Value = "Total Revenue"
+        .Range("D3").Formula = "=SUM(tbl_CustomerData[Revenue Generated])"
+        .Range("D3").NumberFormat = "$#,##0"
+
+        .Range("C4").Value = "Total Leads"
+        .Range("D4").Formula = "=COUNTA(tbl_CustomerData[Lead ID])"
+
+        .Range("C5").Value = "Avg Rev / Lead"
+        .Range("D5").Formula = "=D3/D4"
+        .Range("D5").NumberFormat = "$#,##0"
+
+        .Range("C6").Value = "Converted Leads"
+        .Range("D6").Formula = "=COUNTIF(tbl_CustomerData[Conversion Status],""Converted"")"
+
+        .Range("C7").Value = "Conversion Rate"
+        .Range("D7").Formula = "=D6/D4"
+        .Range("D7").NumberFormat = "0.0%"
+
+        .Range("C8").Value = "Unique Agents"
+        .Range("D8").Formula = "=SUMPRODUCT(1/COUNTIF(tbl_CustomerData[Agent Name],tbl_CustomerData[Agent Name]))"
+
+        wb.Names.Add Name:="KPI_TotalRevenue", RefersTo:=.Range("D3")
+        wb.Names.Add Name:="KPI_TotalLeads", RefersTo:=.Range("D4")
+        wb.Names.Add Name:="KPI_AvgRevLead", RefersTo:=.Range("D5")
+        wb.Names.Add Name:="KPI_ConvertedLeads", RefersTo:=.Range("D6")
+        wb.Names.Add Name:="KPI_ConversionRate", RefersTo:=.Range("D7")
+        wb.Names.Add Name:="KPI_UniqueAgents", RefersTo:=.Range("D8")
+    End With
+
+    '----------------------------------------------------------------
+    ' 3. DASHBOARD SHEET
+    '----------------------------------------------------------------
+    Set wsDash = wb.Worksheets.Add
+    wsDash.Name = "Dashboard"
+    wsDash.Move Before:=wb.Worksheets(1)
+
+    ActiveWindow.DisplayGridlines = False
+
+    Dim shHeader As Shape, shTitle As Shape
+    Set shHeader = wsDash.Shapes.AddShape(msoShapeRectangle, _
+        wsDash.Range("A1").Left, wsDash.Range("A1").Top, _
+        wsDash.Range("A1:Y4").Width, wsDash.Range("A1:Y4").Height)
+    With shHeader
+        .Fill.ForeColor.RGB = RGB(0, 112, 192)
+        .Line.Visible = msoFalse
+        .Shadow.Visible = msoFalse
+        With .TextFrame2.TextRange
+            .Text = "CUSTOMER ANALYTICS DASHBOARD"
+            .Font.Name = "Segoe UI"
+            .Font.Size = 28
+            .Font.Bold = msoTrue
+            .Font.Fill.ForeColor.RGB = RGB(255, 255, 255)
+            .ParagraphFormat.Alignment = msoAlignCenter
+        End With
+        .TextFrame2.VerticalAnchor = msoAnchorMiddle
+    End With
+
+    ' --- Analyst name label (added per request) ---
+    Dim shName As Shape
+    Set shName = wsDash.Shapes.AddTextbox(msoTextOrientationHorizontal, _
+        shHeader.Left + shHeader.Width - 260, shHeader.Top + shHeader.Height + 4, 250, 18)
+    With shName
+        .Name = "lbl_AnalystName"
+        .Fill.Visible = msoFalse
+        .Line.Visible = msoFalse
+        With .TextFrame2.TextRange
+            .Text = "Prepared by: Salman Shaikh | MIS Executive"
+            .Font.Name = "Segoe UI"
+            .Font.Size = 10
+            .Font.Bold = msoTrue
+            .Font.Fill.ForeColor.RGB = RGB(64, 64, 64)
+            .ParagraphFormat.Alignment = msoAlignRight
+        End With
+    End With
+
+    '----------------------------------------------------------------
+    ' A. KPI CARDS (6 calls, no loop)
+    '----------------------------------------------------------------
+    Dim L As Double
+    Const T As Double = 65
+    Const W As Double = 160
+    Const H As Double = 75
+    L = 15
+
+    Call DrawKPICard(wsDash, "Total Revenue", "KPI_TotalRevenue", RGB(91, 155, 213), L, T, W, H, "Rev")
+    L = L + 204
+    Call DrawKPICard(wsDash, "Total Leads", "KPI_TotalLeads", RGB(255, 192, 0), L, T, W, H, "Leads")
+    L = L + 204
+    Call DrawKPICard(wsDash, "Avg Rev / Lead", "KPI_AvgRevLead", RGB(162, 74, 244), L, T, W, H, "AvgRev")
+    L = L + 204
+    Call DrawKPICard(wsDash, "Converted Leads", "KPI_ConvertedLeads", RGB(237, 125, 49), L, T, W, H, "Conv")
+    L = L + 204
+    Call DrawKPICard(wsDash, "Conversion Rate", "KPI_ConversionRate", RGB(20, 181, 174), L, T, W, H, "ConvRate")
+    L = L + 204
+    Call DrawKPICard(wsDash, "Unique Agents", "KPI_UniqueAgents", RGB(0, 176, 240), L, T, W, H, "Agents")
+
+    '----------------------------------------------------------------
+    ' B. CHARTS
+    '----------------------------------------------------------------
+    Dim chrt As Chart
+
+    Set chrt = wsDash.Shapes.AddChart2(-1, xlLine, 130, 155, 500, 270).Chart
+    chrt.SetSourceData Source:=ptTrend.TableRange2
+    Call ApplyProfessionalStyling(chrt, "Trend")
+
+    Set chrt = wsDash.Shapes.AddChart2(-1, xlColumnClustered, 640, 155, 555, 270).Chart
+    chrt.SetSourceData Source:=ptAgent.TableRange2
+    Call ApplyProfessionalStyling(chrt, "Agent")
+
+    Set chrt = wsDash.Shapes.AddChart2(-1, xlColumnClustered, 130, 435, 330, 270).Chart
+    chrt.SetSourceData Source:=ptRegion.TableRange2
+    Call ApplyProfessionalStyling(chrt, "Region")
+
+    Set chrt = wsDash.Shapes.AddChart2(-1, xlBarClustered, 470, 435, 400, 270).Chart
+    chrt.SetSourceData Source:=ptProduct.TableRange2
+    Call ApplyProfessionalStyling(chrt, "Product")
+
+    Set chrt = wsDash.Shapes.AddChart2(-1, xlDoughnut, 880, 435, 315, 270).Chart
+    chrt.SetSourceData Source:=ptConversion.TableRange2
+    Call ApplyProfessionalStyling(chrt, "Conversion")
+
+    '----------------------------------------------------------------
+    ' C. SLICERS
+    '----------------------------------------------------------------
+    Dim scYear As SlicerCache, scCustType As SlicerCache, scProduct As SlicerCache
+    Dim slYear As Slicer, slCustType As Slicer, slProduct As Slicer
+
+    Set scYear = wb.SlicerCaches.Add2(ptTrend, "Year")
+    Set slYear = scYear.Slicers.Add(wsDash, , "Slicer_Year", "Year", 155, 15, 90, 105)
+    slYear.Style = "SlicerStyleDark1"
+    scYear.PivotTables.AddPivotTable ptAgent
+    scYear.PivotTables.AddPivotTable ptRegion
+    scYear.PivotTables.AddPivotTable ptProduct
+    scYear.PivotTables.AddPivotTable ptConversion
+
+    Set scCustType = wb.SlicerCaches.Add2(ptTrend, "Customer Type")
+    Set slCustType = scCustType.Slicers.Add(wsDash, , "Slicer_CustomerType", "Customer Type", 255, 15, 125, 105)
+    slCustType.Style = "SlicerStyleDark1"
+    scCustType.PivotTables.AddPivotTable ptAgent
+    scCustType.PivotTables.AddPivotTable ptRegion
+    scCustType.PivotTables.AddPivotTable ptProduct
+    scCustType.PivotTables.AddPivotTable ptConversion
+
+    Set scProduct = wb.SlicerCaches.Add2(ptTrend, "Product/Service")
+    Set slProduct = scProduct.Slicers.Add(wsDash, , "Slicer_Product", "Product/Service", 390, 15, 220, 105)
+    slProduct.Style = "SlicerStyleDark1"
+    scProduct.PivotTables.AddPivotTable ptAgent
+    scProduct.PivotTables.AddPivotTable ptRegion
+    scProduct.PivotTables.AddPivotTable ptProduct
+    scProduct.PivotTables.AddPivotTable ptConversion
+
+    '----------------------------------------------------------------
+    ' D. REFRESH BUTTON (added on request)
+    '----------------------------------------------------------------
+    Dim shRefresh As Shape
+    Set shRefresh = wsDash.Shapes.AddShape(msoShapeRoundedRectangle, 15, 12, 110, 30)
+    With shRefresh
+        .Name = "btn_Refresh"
+        .Fill.ForeColor.RGB = RGB(255, 255, 255)
+        .Line.Visible = msoFalse
+        With .TextFrame2.TextRange
+            .Text = "REFRESH"
+            .Font.Name = "Segoe UI"
+            .Font.Size = 12
+            .Font.Bold = msoTrue
+            .Font.Fill.ForeColor.RGB = RGB(0, 112, 192)
+            .ParagraphFormat.Alignment = msoAlignCenter
+        End With
+        .TextFrame2.VerticalAnchor = msoAnchorMiddle
+        .OnAction = "RefreshDashboardData"
+    End With
+
+    wsDash.Activate
+
+End Sub
+
+'====================================================================
+' Refresh macro - refreshes all pivot caches (linked to Refresh button)
+'====================================================================
+Public Sub RefreshDashboardData()
+    Dim wb As Workbook, pc As PivotCache
+    Set wb = ThisWorkbook
+    For Each pc In wb.PivotCaches
+        pc.Refresh
+    Next pc
+    MsgBox "Dashboard data refreshed.", vbInformation, "Customer Analytics Dashboard"
+End Sub
+
+'====================================================================
+' 4. UI HELPER FUNCTIONS (pasted exactly as provided - DO NOT MODIFY)
+'====================================================================
+Public Sub DrawKPICard(ws As Worksheet, cardTitle As String, cellFormulaLink As String, accentClr As Long, L As Double, T As Double, W As Double, H As Double, safeKey As String)
+    Dim shBody As Shape, shTitle As Shape, shVal As Shape
+    Set shBody = ws.Shapes.AddShape(msoShapeRoundedRectangle, L, T, W, H)
+    With shBody
+        .Fill.ForeColor.RGB = accentClr
+        .Line.Visible = msoFalse
+        .Shadow.Visible = msoFalse
+    End With
+    Set shTitle = ws.Shapes.AddTextbox(msoTextOrientationHorizontal, L + 6, T + 5, W - 12, 18)
+    With shTitle
+        .Name = "KPI_Title_" & safeKey
+        .Fill.Visible = msoFalse
+        .Line.Visible = msoFalse
+        With .TextFrame2.TextRange
+            .Text = UCase(cardTitle)
+            .Font.Name = "Segoe UI": .Font.Size = 10: .Font.Bold = msoTrue
+            .Font.Fill.ForeColor.RGB = RGB(255, 255, 255)
+            .ParagraphFormat.Alignment = msoAlignCenter
+        End With
+    End With
+    Set shVal = ws.Shapes.AddTextbox(msoTextOrientationHorizontal, L + 4, T + 25, W - 8, H - 35)
+    With shVal
+        .Name = "KPI_Val_" & safeKey
+        .Fill.Visible = msoFalse
+        .Line.Visible = msoFalse
+        .DrawingObject.Formula = "=" & cellFormulaLink
+        With .TextFrame2.TextRange
+            .Font.Name = "Segoe UI": .Font.Size = 20: .Font.Bold = msoTrue
+            .Font.Fill.ForeColor.RGB = RGB(255, 255, 255)
+            .ParagraphFormat.Alignment = msoAlignCenter
+        End With
+    End With
+End Sub
+
+Public Sub ApplyProfessionalStyling(ch As Chart, chartType As String)
+    Dim s As Series, i As Long, pName As String
+    On Error Resume Next
+    ch.ShowAllFieldButtons = False
+    ch.HasTitle = True
+    ch.ChartTitle.Font.Name = "Segoe UI"
+    ch.ChartTitle.Font.Bold = True
+    ch.ChartTitle.Font.Size = 12
+    ch.Axes(xlValue).HasMajorGridlines = False
+    Select Case chartType
+        Case "Trend"
+            ch.ChartType = xlLineMarkersStacked
+            ch.ChartTitle.Text = "Revenue Trend by Month"
+            ch.HasLegend = False
+            ch.SetElement msoElementDataLabelTop
+            ch.Axes(xlCategory).AxisBetweenCategories = False
+            If ch.SeriesCollection.Count >= 1 Then
+                ch.SeriesCollection(1).Format.Line.ForeColor.RGB = RGB(0, 176, 80)
+                ch.SeriesCollection(1).Smooth = True
+            End If
+            If ch.SeriesCollection.Count >= 2 Then
+                ch.SeriesCollection(2).Format.Line.ForeColor.RGB = RGB(255, 0, 0)
+                ch.SeriesCollection(2).Smooth = True
+            End If
+        Case "Agent"
+            ch.ChartType = xlColumnClustered
+            ch.ChartGroups(1).GapWidth = 20
+            ch.ChartTitle.Text = "Top Performing Agents"
+            ch.HasLegend = False
+            ch.SeriesCollection(1).Format.Fill.ForeColor.RGB = RGB(237, 125, 49)
+            ch.SeriesCollection(1).Format.Line.Visible = msoTrue
+            ch.SeriesCollection(1).Format.Line.ForeColor.RGB = RGB(127, 127, 127)
+        Case "Region"
+            ch.ChartType = xlColumnClustered
+            ch.ChartTitle.Text = "Revenue by Region"
+            ch.HasLegend = False
+            ch.SetElement msoElementDataLabelOutSideEnd
+            Set s = ch.SeriesCollection(1)
+            s.Format.Line.Visible = msoTrue
+            s.Format.Line.ForeColor.RGB = RGB(127, 127, 127)
+            If s.Points.Count >= 1 Then s.Points(1).Format.Fill.ForeColor.RGB = RGB(123, 147, 214)
+            If s.Points.Count >= 2 Then s.Points(2).Format.Fill.ForeColor.RGB = RGB(184, 255, 0)
+            If s.Points.Count >= 3 Then s.Points(3).Format.Fill.ForeColor.RGB = RGB(248, 154, 100)
+            If s.Points.Count >= 4 Then s.Points(4).Format.Fill.ForeColor.RGB = RGB(162, 74, 244)
+            If s.Points.Count >= 5 Then s.Points(5).Format.Fill.ForeColor.RGB = RGB(0, 176, 240)
+        Case "Product"
+            ch.ChartType = xlBarClustered
+            ch.ChartTitle.Text = "Revenue by Product/Service"
+            ch.HasLegend = False
+            ch.SetElement msoElementDataLabelOutSideEnd
+            ch.SeriesCollection(1).Format.Fill.ForeColor.RGB = RGB(20, 181, 174)
+            ch.SeriesCollection(1).Format.Line.Visible = msoTrue
+            ch.SeriesCollection(1).Format.Line.ForeColor.RGB = RGB(127, 127, 127)
+        Case "Conversion"
+            ch.ChartType = xlDoughnut
+            ch.ChartTitle.Text = "Conversion Breakdown"
+            ch.HasLegend = True
+            ch.Legend.Position = xlLegendPositionBottom
+            Set s = ch.SeriesCollection(1)
+            s.DoughnutHoleSize = 55
+            s.ApplyDataLabels
+            s.DataLabels.ShowPercentage = True
+            s.DataLabels.ShowValue = False
+            For i = 1 To s.Points.Count
+                pName = LCase$(CStr(s.XValues(i)))
+                If InStr(1, pName, "not", vbTextCompare) > 0 Then
+                    s.Points(i).Format.Fill.ForeColor.RGB = RGB(255, 192, 0)
+                ElseIf InStr(1, pName, "converted", vbTextCompare) > 0 Then
+                    s.Points(i).Format.Fill.ForeColor.RGB = RGB(0, 176, 240)
+                End If
+            Next i
+    End Select
+    On Error GoTo 0
+End Sub

@@ -59,6 +59,5 @@ Salman
 Aspiring Data Analyst | Excel, VBA & Automation
 
 ⭐ If you found this project helpful, don't forget to Star this repository.
-Aspiring Data Analyst | Excel, VBA & Automation
 
 ⭐ If you found this project helpful, don't forget to Star this repository.
